@@ -149,121 +149,171 @@ flowchart TD
 
 ## 🧩 Architecture
 
-The app has two parts: a **React** single-page app and a **Node/Express** REST API. They talk over HTTP,
-and every request after login carries a JWT. The API stores data in **MongoDB**, stores uploaded videos
-on **disk**, calls **Gemini** for captions, and runs the **scheduler** inside the same process.
+SocialSync has two parts: a **React** single-page app and a **Node/Express** REST API. They talk over
+HTTP, and every request after login carries a JWT. The API stores data in **MongoDB**, keeps uploaded
+videos on **disk**, asks **Gemini** for captions, and runs the **scheduler** inside the same process.
+
+> [!TIP]
+> **How to read these diagrams:** they run top to bottom.
+> 🟪 Purple boxes are steps, 🟩 green is success, 🟥 red is rejected or failed, and 🟨 yellow is a
+> fallback. On GitHub you can also click a diagram to pan and zoom it.
+
+**Jump to:**
+[System overview](#-system-overview) ·
+[Request pipeline](#-what-happens-to-every-api-request) ·
+[Login](#-login-and-authentication) ·
+[AI captions](#-ai-caption-generation) ·
+[Video upload](#-uploading-a-video) ·
+[Cross-posting](#-posting-to-several-platforms-at-once) ·
+[Scheduler](#-the-scheduler) ·
+[Video cleanup](#-when-video-files-are-deleted) ·
+[Post lifecycle](#-post-lifecycle) ·
+[Design decisions](#-design-decisions)
+
+### 🧱 System overview
 
 ```mermaid
-flowchart LR
-    U(["👤 User<br/>browser"])
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 40, "rankSpacing": 60}}}%%
+flowchart TD
+    U(["👤 User in the browser"])
 
-    subgraph FE["🖥️ Frontend · React + Vite"]
-        direction TB
-        UI["Pages<br/>Dashboard · Editor · Schedule<br/>Analytics · Accounts"]
-        CTX["Context API<br/>Auth · Posts · Accounts · Toast"]
-        AX["Axios client<br/>adds the JWT to each request"]
-        UI --> CTX --> AX
+    subgraph FE["🖥️ React frontend"]
+        direction LR
+        UI["📄 Pages"] --> CTX["🧠 Context<br/>state"] --> AX["📡 Axios<br/>+ JWT"]
     end
 
-    subgraph BE["⚙️ Backend · Node + Express"]
-        direction TB
-        MW["Middleware<br/>helmet · CORS · rate limits · JWT check"]
-        RT["Routes and controllers<br/>auth · posts · media · accounts<br/>content · analytics"]
-        SV["Services<br/>AI captions · Publisher · Media storage"]
-        CR["⏰ node-cron<br/>every minute: publish due posts<br/>every hour: remove unused uploads"]
-        MW --> RT --> SV
-        CR --> SV
+    subgraph BE["⚙️ Express API"]
+        direction LR
+        MW["🛡️ Middleware"] --> RT["🧭 Routes +<br/>controllers"] --> SV["🧩 Services"]
+        CR["⏰ Cron jobs"] --> SV
     end
 
-    DB[("🍃 MongoDB<br/>users · posts · socialaccounts")]
-    FS[("💾 Disk<br/>uploads/videos")]
-    AI["🤖 Google Gemini"]
+    subgraph DATA["💾 Data and AI"]
+        direction LR
+        DB[("🍃 MongoDB")] ~~~ FS[("📁 Video<br/>files")] ~~~ AI["🤖 Gemini"]
+    end
 
-    U --> UI
-    AX -- "REST /api + Bearer JWT" --> MW
-    U -. "video player loads /uploads/..." .-> FS
-    SV <--> DB
-    SV <--> FS
-    SV -- "generate 3 captions" --> AI
+    U == "uses the app" ==> FE
+    FE == "REST calls to /api<br/>with Bearer JWT" ==> BE
+    BE == "reads and writes data<br/>asks for captions" ==> DATA
 
-    classDef fe fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E
-    classDef be fill:#EDE9FE,stroke:#7C3AED,color:#3B0764
-    classDef ext fill:#DCFCE7,stroke:#16A34A,color:#14532D
+    classDef user fill:#FCE7F3,stroke:#DB2777,stroke-width:2px,color:#831843
+    classDef fe fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+    classDef be fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef data fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    class U user
     class UI,CTX,AX fe
     class MW,RT,SV,CR be
-    class DB,FS,AI ext
+    class DB,FS,AI data
+    style FE fill:#F0F9FF,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+    style BE fill:#F5F3FF,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    style DATA fill:#F0FDF4,stroke:#16A34A,stroke-width:2px,color:#14532D
 ```
+
+| Part | What it does |
+|---|---|
+| 📄 **Pages** | Dashboard, Create Post, Schedule, Analytics and Accounts |
+| 🧠 **Context state** | Shared React state: Auth, Posts, Accounts and Toast messages |
+| 📡 **Axios + JWT** | Sends every API call and adds the login token |
+| 🛡️ **Middleware** | helmet, CORS, the 2 MB JSON limit, the JWT check, rate limits and multer for uploads |
+| 🧭 **Routes + controllers** | `auth`, `posts`, `media`, `accounts`, `content` and `analytics` |
+| 🧩 **Services** | AI captions (Gemini), the publisher, and video storage |
+| ⏰ **Cron jobs** | Every minute: publish due posts. Every hour: remove unused uploads |
+| 🍃 **MongoDB** | The `users`, `posts` and `socialaccounts` collections |
+| 📁 **Video files** | Stored in `uploads/videos/`. The API serves them at `/uploads/...` so the browser can play them |
+| 🤖 **Gemini** | Writes the 3 caption options |
 
 ### 🚦 What happens to every API request
 
-Each request passes through the same middleware chain before it reaches a controller. Any error lands
-in one global handler that turns it into a JSON response.
+Every request passes through the same steps in order. Any error ends up in one error handler, which
+turns it into a JSON response.
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 40, "rankSpacing": 40}}}%%
 flowchart TD
-    R(["📨 Request"]) --> H["🪖 helmet<br/>security headers"]
-    H --> C{"🌐 CORS<br/>origin in CLIENT_URL?"}
-    C -- "no" --> X1(["❌ blocked by browser"])
-    C -- "yes" --> B["📦 Body parser<br/>JSON up to 2 MB"]
-    B --> RT{"🧭 Which route?"}
-    RT -- "health check" --> CT
-    RT -- "register · login" --> AL{"⏱️ Login limit per IP<br/>10 failed / 15 min"}
-    AL -- "over" --> X3(["429"])
-    AL -- "ok" --> CT
-    RT -- "everything else" --> P{"🔐 protect<br/>valid JWT?"}
-    P -- "no" --> X2(["401"])
-    P -- "yes" --> L{"⏱️ Per-user limit<br/>AI 20/h · uploads 30/h"}
-    L -- "over" --> X3
-    L -- "ok, or no limit" --> CT["🎯 Controller<br/>(multer first for uploads)"]
-    CT --> OK(["✅ JSON response"])
-    CT -- "throws" --> E["🧯 Error handler<br/>400 · 404 · 409 · 413 · 500"]
+    R(["📨 Request arrives"]) --> H["① 🪖 Security headers (helmet)"]
+    H --> C["② 🌐 CORS: only origins in CLIENT_URL"]
+    C --> B["③ 📦 Read the JSON body (max 2 MB)"]
+    B --> P["④ 🔐 Check the JWT<br/>skipped for register, login and health<br/>❌ missing or invalid: 401"]
+    P --> RL["⑤ ⏱️ Check the rate limit<br/>❌ over the limit: 429"]
+    RL --> CT["⑥ 🎯 Route handler runs<br/>multer saves uploads first"]
+    CT --> D{"Worked?"}
+    D -- "yes" --> OK(["✅ JSON response"])
+    D -- "no" --> ERR(["⚠️ Error handler<br/>400 · 404 · 409 · 413 · 500"])
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef bad fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef bad fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+    class R,H,C,B,P,RL,CT,D step
     class OK ok
-    class X1,X2,X3,E bad
+    class ERR bad
 ```
+
+| Rate limit | Applies to | Counted per |
+|---|---|---|
+| 10 **failed** attempts per 15 minutes | All `/api/auth` routes (register, login, me) | IP address |
+| 20 per hour | AI caption generation | User |
+| 30 per hour | Video uploads | User |
+| None | Every other route | — |
 
 ### 🔐 Login and authentication
 
 ```mermaid
+%%{init: {"sequence": {"mirrorActors": false, "actorMargin": 30, "messageMargin": 40, "messageFontSize": 16, "noteFontSize": 16, "actorFontSize": 16}}}%%
 sequenceDiagram
     autonumber
-    actor U as User
-    participant R as React app
-    participant A as Express API
-    participant D as MongoDB
+    actor U as 👤 User
+    participant R as 🖥️ React app
+    participant A as ⚙️ API
+    participant D as 🍃 MongoDB
 
-    U->>R: Email and password
+    rect rgba(124, 58, 237, 0.10)
+    Note over U,D: Log in once
+    U->>R: Email + password
     R->>A: POST /api/auth/login
     A->>D: Find user by email
-    A->>A: bcrypt.compare(password, hash)
-    A-->>R: JWT (valid 7 days by default) and user
-    R->>R: Save token in localStorage
-    R->>A: Later requests send the token as Authorization: Bearer
-    A->>A: protect middleware verifies the JWT and loads the user
-    A-->>R: Only this user's data
+    D-->>A: User + password hash
+    A->>A: bcrypt.compare()
+    A-->>R: JWT (7 days) + user
+    R->>R: Store the JWT
+    end
+
+    rect rgba(22, 163, 74, 0.10)
+    Note over U,D: Every request after that
+    R->>A: Request + Bearer JWT
+    A->>A: Verify JWT
+    A->>D: This user's data only
+    A-->>R: JSON response
+    end
 ```
+
+If the token is missing, invalid or expired, the API answers `401`. The app then clears the session and
+sends the user to the login page.
 
 ### 🤖 AI caption generation
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 40, "rankSpacing": 40}}}%%
 flowchart TD
-    S(["✍️ Topic + platform + tone"]) --> K{"GEMINI_API_KEY set?"}
+    S(["✍️ Topic · platforms · tone"]) --> K{"Gemini key<br/>set?"}
+    K -- "yes" --> G["🤖 Ask Gemini for 3 options<br/>prompt includes tone and platform rules"]
     K -- "no" --> FB["🛟 Build 3 template captions"]
-    K -- "yes" --> G["🤖 Ask Gemini for 3 options<br/>tone and platform rules in the prompt<br/>platform 'all' = fits every network"]
-    G --> J{"Valid JSON with<br/>an options list?"}
-    J -- "no, or the call failed" --> FB
+    G --> J{"Valid<br/>JSON?"}
     J -- "yes" --> OK(["✅ 3 caption + hashtag options"])
+    J -- "no, or the<br/>call failed" --> FB
     FB --> OK
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef warn fill:#FEF3C7,stroke:#D97706,color:#78350F
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef warn fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    class S,K,G,J step
     class OK ok
     class FB warn
 ```
 
-The endpoint is limited to 20 requests per hour per user, because AI calls cost money.
+- When several platforms are ticked, the editor sends `platform: 'all'`. Gemini is then asked for one
+  caption that fits every network, including X's 280 characters.
+- Generation is limited to 20 requests per hour per user, because AI calls cost money.
 
 ### 🎬 Uploading a video
 
@@ -271,75 +321,73 @@ Videos upload as soon as they're picked, while the user is still writing. Creati
 sends the small `videoKey`.
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 40, "rankSpacing": 40}}}%%
 flowchart TD
-    A(["🎬 User picks a video"]) --> B{"Browser check<br/>MP4 / MOV / WebM<br/>and ≤ 100 MB?"}
-    B -- "no" --> X1(["⚠️ Error shown, nothing sent"])
-    B -- "yes" --> C["📤 POST /api/media/video<br/>multipart, with progress bar"]
-    C --> D{"🔐 Logged in and<br/>under 30 uploads/hour?"}
-    D -- "no" --> X2(["401 / 429"])
-    D -- "yes" --> E{"multer: allowed type<br/>and under MAX_VIDEO_MB?"}
-    E -- "no" --> X3(["400 / 413"])
-    E -- "yes" --> F["💾 Saved as<br/>uploads/videos/userId/random-uuid.mp4"]
-    F --> G{"🔍 Do the first bytes<br/>really look like a video?"}
-    G -- "no" --> X4(["🗑️ File deleted · 400"])
-    G -- "yes" --> OK(["✅ 201 with key, url, size"])
+    A(["🎬 User picks a video"]) --> B["① 🖥️ Browser checks the file<br/>MP4 · MOV · WebM, up to 100 MB<br/>❌ otherwise: error, nothing sent"]
+    B --> C["② 📤 Upload with a progress bar<br/>POST /api/media/video"]
+    C --> D["③ 🔐 API checks login and upload limit<br/>❌ otherwise: 401 or 429"]
+    D --> E["④ 📥 multer checks type and size<br/>❌ otherwise: 400 or 413"]
+    E --> F["⑤ 💾 Saved with a random name<br/>uploads/videos/userId/uuid.mp4"]
+    F --> G["⑥ 🔍 Is it really a video?<br/>its first bytes are checked<br/>❌ otherwise: file deleted, 400"]
+    G --> OK(["✅ 201 · returns key, url and size"])
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef bad fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    class A,B,C,D,E,F,G step
     class OK ok
-    class X1,X2,X3,X4 bad
 ```
 
 ### 📣 Posting to several platforms at once
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 20, "rankSpacing": 40}}}%%
 flowchart TD
-    A(["📣 POST /api/posts/multi<br/>platforms · content · videoKey? · publishNow?"]) --> B{"✔️ All checks pass?"}
-    B -. "checks" .- CK["• platforms are valid (repeats removed)<br/>• caption present, status and schedule allowed<br/>• image OR video, not both<br/>• videoKey belongs to this user and the file exists"]
-    B -- "no" --> X1(["400 · nothing is saved"])
-    B -- "yes" --> I["🗂️ insertMany: one post per platform<br/>same groupId · same video · same time"]
-    I --> N{"publishNow?"}
-    N -- "no" --> R1(["✅ 201 · drafts or scheduled posts"])
-    N -- "yes" --> P["🚀 Publish every copy in parallel<br/>each one atomically claimed first"]
+    A(["📣 POST /api/posts/multi"]) --> CK["✔️ Check everything once<br/>platforms valid · repeats removed<br/>caption, status and schedule allowed<br/>an image OR a video · own video only<br/>❌ otherwise: 400, nothing saved"]
+    CK --> I["🗂️ Save one post per platform<br/>shared groupId · video · time"]
+    I --> N{"Publish<br/>now?"}
+    N -- "no" --> R1(["✅ 201 · drafts or scheduled<br/>scheduler publishes later"])
+    N -- "yes" --> P["🚀 Publish all copies in parallel"]
     P --> IG["📸 Instagram"] & FBK["📘 Facebook"] & XT["✖️ X"] & LI["💼 LinkedIn"]
-    IG & FBK & XT & LI --> R2(["✅ 201 · status for each platform<br/>e.g. Published to 3 of 4"])
+    IG & FBK & XT & LI --> R2(["✅ 201 · a status per platform<br/>e.g. Published to 3 of 4"])
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef bad fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
-    classDef plat fill:#EDE9FE,stroke:#7C3AED,color:#3B0764
-    classDef note fill:#FEF3C7,stroke:#D97706,color:#78350F
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef plat fill:#E0F2FE,stroke:#0284C7,stroke-width:2px,color:#0C4A6E
+    class A,CK,I,N,P step
     class R1,R2 ok
-    class X1 bad
     class IG,FBK,XT,LI plat
-    class CK note
 ```
+
+Each platform gets its **own** post, so one platform can fail (for example, no LinkedIn account) while
+the others publish. A post can also be edited or deleted on its own.
 
 ### ⏰ The scheduler
 
-`node-cron` runs every minute inside the API process:
+`node-cron` runs this every minute inside the API process:
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 40, "rankSpacing": 40}}}%%
 flowchart TD
-    T(["⏰ Cron tick, every minute"]) --> R{"Previous run<br/>still going?"}
-    R -- "yes" --> S(["Skip this tick"])
-    R -- "no" --> Q["Find up to 50 posts with<br/>status = scheduled and<br/>scheduledTime ≤ now"]
-    Q --> L{"🔒 Atomic claim<br/>scheduled → publishing"}
-    L -- "claimed elsewhere" --> K(["Skip the post"])
-    L -- "claimed" --> C{"Account connected<br/>for this platform?"}
-    C -- "no" --> F["❌ failed, with a reason"]
-    C -- "yes" --> P["✅ published, with a platform post ID<br/>and engagement numbers"]
+    T(["⏰ Every minute"]) --> R["⏳ Is the last run still busy?<br/>⏭️ yes: skip this tick"]
+    R --> Q["🔎 Find up to 50 due posts<br/>status scheduled · time ≤ now"]
+    Q --> L["🔒 Claim each post atomically<br/>⏭️ already claimed: skip it"]
+    L --> C{"Account<br/>connected?"}
+    C -- "yes" --> P(["✅ published<br/>post ID + engagement"])
+    C -- "no" --> F(["❌ failed<br/>reason saved"])
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef bad fill:#FEE2E2,stroke:#DC2626,color:#7F1D1D
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef bad fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+    class T,R,Q,L,C step
     class P ok
     class F bad
 ```
 
 - **🔒 Atomic claim:** each post is claimed with one `findOneAndUpdate({ _id, status: 'scheduled' })`.
   If two ticks overlap, several servers run, or a **Publish Now** click races the scheduler, only one
-  of them gets the post.
-- **♻️ Crash recovery:** a post stuck in `publishing` for more than 10 minutes is put back to
-  `scheduled`. This check also runs when the server starts.
+  of them gets the post. A post is never published twice.
+- **♻️ Crash recovery:** when the server starts, any post stuck in `publishing` for more than 10 minutes
+  (for example after a crash) is put back to `scheduled`.
 
 ### 🧹 When video files are deleted
 
@@ -347,17 +395,17 @@ One video can be shared by every copy of a cross-post, so a file is only deleted
 any more**.
 
 ```mermaid
-flowchart LR
-    D1(["🗑️ Delete one post"]) --> Q
-    D2(["🗑️ Delete from all platforms"]) --> Q
-    D3(["❎ Remove video in the editor"]) --> Q
-    D4(["⏰ Hourly sweep<br/>uploads older than 24 h"]) --> Q
-    Q{"Is any post still<br/>using this video?"}
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"wrappingWidth": 360, "nodeSpacing": 25, "rankSpacing": 40}}}%%
+flowchart TD
+    D1(["🗑️ Delete<br/>one post"]) & D2(["🗑️ Delete from<br/>all platforms"]) & D3(["❎ Remove video<br/>in the editor"]) & D4(["⏰ Hourly sweep<br/>uploads over 24 h old"]) --> Q
+    Q{"Still used<br/>by a post?"}
     Q -- "yes" --> K(["📼 Keep the file"])
     Q -- "no" --> R(["🧹 Delete the file"])
 
-    classDef ok fill:#DCFCE7,stroke:#16A34A,color:#14532D
-    classDef warn fill:#FEF3C7,stroke:#D97706,color:#78350F
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    classDef ok fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef warn fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    class D1,D2,D3,D4,Q step
     class K ok
     class R warn
 ```
@@ -365,18 +413,26 @@ flowchart LR
 ### 📦 Post lifecycle
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}}}%%
 stateDiagram-v2
-    direction LR
-    [*] --> draft : Save draft
-    [*] --> scheduled : Schedule or Publish Now
-    draft --> scheduled : User schedules
-    scheduled --> draft : User unschedules
-    scheduled --> publishing : Claimed by scheduler or Publish Now
-    publishing --> published : Success
-    publishing --> failed : No account or error
-    publishing --> scheduled : Stuck over 10 min
-    failed --> scheduled : User reschedules
+    direction TB
+    [*] --> draft : save draft
+    [*] --> scheduled : schedule or publish now
+    draft --> scheduled : schedule
+    scheduled --> draft : unschedule
+    scheduled --> publishing : claimed
+    publishing --> published : success
+    publishing --> failed : no account or error
+    publishing --> scheduled : stuck, reset on restart
+    failed --> scheduled : reschedule
     published --> [*]
+
+    classDef good fill:#DCFCE7,stroke:#16A34A,stroke-width:2px,color:#14532D
+    classDef bad fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+    classDef step fill:#EDE9FE,stroke:#7C3AED,stroke-width:2px,color:#3B0764
+    class published good
+    class failed bad
+    class draft,scheduled,publishing step
 ```
 
 Only the server can move a post to `published` or `failed`. The API rejects any attempt by a client to
