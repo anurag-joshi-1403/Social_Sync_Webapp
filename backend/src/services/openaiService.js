@@ -29,7 +29,12 @@ const PLATFORM_HINTS = {
   facebook: 'Facebook post, conversational, 1-2 short paragraphs.',
   twitter: 'Tweet, max 280 characters, punchy and scannable.',
   linkedin: 'LinkedIn post, professional, insightful, 3-5 short paragraphs.',
+  // A cross-post goes out unchanged everywhere, so it has to fit X's limit.
+  all: 'One caption posted unchanged to several networks (Instagram, Facebook, X, LinkedIn). Keep caption plus hashtags under 280 characters and avoid platform-specific phrasing.',
 };
+
+const targetLabel = (platform) =>
+  platform === 'all' ? 'cross-platform' : platform;
 
 // ---------- Fallback content (no API key or API error) ----------
 const buildFallbackOptions = ({ topic, platform, tone }) => {
@@ -66,6 +71,7 @@ const buildFallbackOptions = ({ topic, platform, tone }) => {
     facebook: ['#Facebook', '#Community', '#Trending', '#Discover', '#FollowUs'],
     twitter: ['#NowTrending', '#X', '#Trending', '#News', '#Viral'],
     linkedin: ['#LinkedIn', '#Career', '#Professional', '#Growth', '#Networking'],
+    all: ['#Trending', '#Community', '#Discover'],
   };
 
   const topicTags = (topic || '')
@@ -103,10 +109,10 @@ const generateContent = async ({ topic, platform, tone }) => {
 
   const systemPrompt = `You are a social media copywriter. You write engaging, high-quality posts that drive engagement.
 ${toneHint}
-Target platform: ${platform}. ${platformHint}
-Always end with relevant hashtags (5-7 total).`;
+Target platform: ${targetLabel(platform)}. ${platformHint}
+Always end with relevant hashtags (${platform === 'all' ? '3-4' : '5-7'} total).`;
 
-  const userPrompt = `Generate 3 different caption options for a ${platform} post about: "${topic}".
+  const userPrompt = `Generate 3 different caption options for a ${targetLabel(platform)} post about: "${topic}".
 Tone: ${tone}.
 Return ONLY valid JSON in this exact format (no markdown fences, no extra text):
 {

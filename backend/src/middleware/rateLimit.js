@@ -31,4 +31,16 @@ const contentLimiter = rateLimit({
   ),
 });
 
-module.exports = { authLimiter, contentLimiter };
+// Video uploads are large and fill disk, so they are capped per user account
+// too. Mount this AFTER `protect` so req.user exists.
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  limit: 30,
+  keyGenerator: (req, res) =>
+    req.user ? `user:${req.user._id}` : ipKeyGenerator(req, res),
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: json('Upload limit reached (30 per hour). Please try again later.'),
+});
+
+module.exports = { authLimiter, contentLimiter, uploadLimiter };

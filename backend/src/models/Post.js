@@ -41,6 +41,22 @@ const postSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    // Videos are too big for the document, so the file lives in storage (see
+    // services/mediaService.js) and the post keeps a reference. Several posts
+    // may share one key: a cross-post uploads the video once.
+    video: {
+      key: { type: String, default: '' },
+      url: { type: String, default: '' },
+      mimeType: { type: String, default: '' },
+      size: { type: Number, default: 0 },
+    },
+    // Shared by the per-platform copies created from one cross-post submit.
+    // Null for a post that went to a single platform.
+    groupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      default: null,
+      index: true,
+    },
     status: {
       type: String,
       // 'publishing' is a short-lived lock the scheduler claims a post with.
@@ -81,6 +97,15 @@ const postSchema = new mongoose.Schema(
 
 // Compound index for scheduler: find due posts fast
 postSchema.index({ status: 1, scheduledTime: 1 });
+
+// Platforms take one kind of media per post, so an image and a video together
+// is refused rather than one silently winning.
+postSchema.pre('validate', function (next) {
+  if (this.image && this.video?.key) {
+    this.invalidate('video', 'A post can have an image or a video, not both');
+  }
+  next();
+});
 
 // Keep `hasImage` in step with `image` however the document was modified.
 postSchema.pre('save', function (next) {

@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const morgan = require('morgan');
 const { authLimiter } = require('./middleware/rateLimit');
+const { uploadRoot } = require('./services/mediaService');
 
 // Builds the Express app without connecting to a database or binding a port,
 // so tests can mount it directly. See server.js for the runtime entry point.
@@ -54,9 +55,24 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// ---------- Uploaded media ----------
+// Files are named with random UUIDs, so their URLs can't be guessed. The SPA
+// runs on another origin, and helmet's default same-origin
+// Cross-Origin-Resource-Policy would stop its <video> tags loading them.
+// express.static supports Range requests, which video seeking needs.
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.set('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  },
+  express.static(uploadRoot(), { maxAge: '7d', immutable: true, index: false })
+);
+
 // ---------- Routes ----------
 app.use('/api/auth', authLimiter, require('./routes/auth'));
 app.use('/api/posts', require('./routes/posts'));
+app.use('/api/media', require('./routes/media'));
 app.use('/api/accounts', require('./routes/accounts'));
 // The content router applies its own per-user limiter after `protect`.
 app.use('/api/content', require('./routes/content'));
