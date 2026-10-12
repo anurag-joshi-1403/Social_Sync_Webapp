@@ -74,6 +74,23 @@ export const PostsProvider = ({ children }) => {
     }
   };
 
+  // ---------- Create one post per platform (cross-post) ----------
+  const addPosts = async (payload) => {
+    setError('');
+    try {
+      const data = await postsService.createMulti(payload);
+      const created = (data.posts || []).map((p) => ({
+        ...p,
+        id: p._id || p.id,
+      }));
+      setPosts((prev) => [...created, ...prev]);
+      return created;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  };
+
   // ---------- Update a post ----------
   const updatePost = async (id, updates) => {
     setError('');
@@ -103,6 +120,18 @@ export const PostsProvider = ({ children }) => {
     }
   };
 
+  // ---------- Delete every copy of a cross-post ----------
+  const deleteGroup = async (groupId) => {
+    setError('');
+    try {
+      await postsService.removeGroup(groupId);
+      setPosts((prev) => prev.filter((p) => p.groupId !== groupId));
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    }
+  };
+
   // ---------- Manual refresh ----------
   const refresh = () => fetchPosts();
 
@@ -111,8 +140,10 @@ export const PostsProvider = ({ children }) => {
     loading,
     error,
     addPost,
+    addPosts,
     updatePost,
     deletePost,
+    deleteGroup,
     refresh,
   };
 

@@ -3,8 +3,10 @@ const {
   publishDuePosts,
   releaseStaleClaims,
 } = require('../services/publisherService');
+const { sweepOrphanVideos } = require('../services/mediaService');
 
 let task = null;
+let sweepTask = null;
 let running = false;
 
 function startScheduler() {
@@ -38,6 +40,13 @@ function startScheduler() {
     }
   );
 
+  // Hourly: delete video uploads that were never attached to a post.
+  sweepTask = cron.schedule('0 * * * *', () =>
+    sweepOrphanVideos().catch((error) =>
+      console.error('❌ Video sweep failed:', error.message)
+    )
+  );
+
   console.log('⏰ Scheduler started — checking every minute for due posts');
   return task;
 }
@@ -46,6 +55,8 @@ function stopScheduler() {
   if (task) {
     task.stop();
     task = null;
+    sweepTask?.stop();
+    sweepTask = null;
     console.log('⏰ Scheduler stopped');
   }
 }

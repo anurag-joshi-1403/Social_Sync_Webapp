@@ -1,4 +1,5 @@
 import { PLATFORMS } from '../../constants/platforms.js';
+import MediaBadge from '../common/MediaBadge.jsx';
 
 const TopPostsTable = ({ posts }) => {
   if (!posts || posts.length === 0) {
@@ -60,15 +61,7 @@ const TopPostsTable = ({ posts }) => {
                   </td>
                   <td className="text-truncate" style={{ maxWidth: '300px' }}>
                     <div className="d-flex align-items-center">
-                      {post.hasImage && (
-                        <span
-                          className="me-2 rounded bg-light text-muted d-inline-flex align-items-center justify-content-center flex-shrink-0"
-                          style={{ width: 36, height: 36 }}
-                          title="This post has an image"
-                        >
-                          <i className="bi bi-image"></i>
-                        </span>
-                      )}
+                      <MediaBadge post={post} size={36} />
                       <span className="small">{post.content}</span>
                     </div>
                   </td>

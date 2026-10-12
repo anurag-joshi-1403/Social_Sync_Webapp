@@ -83,6 +83,7 @@ const getAnalytics = async (req, res, next) => {
           content: post.content,
           platform: post.platform,
           hasImage: post.hasImage,
+          hasVideo: Boolean(post.video?.key),
           likes: e.likes || 0,
           comments: e.comments || 0,
           shares: e.shares || 0,

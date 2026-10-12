@@ -1,6 +1,7 @@
 const { generateContent } = require('../services/openaiService');
 
-const VALID_PLATFORMS = ['instagram', 'facebook', 'twitter', 'linkedin'];
+// 'all' asks for one caption that works on every network, for cross-posts.
+const VALID_PLATFORMS = ['instagram', 'facebook', 'twitter', 'linkedin', 'all'];
 const VALID_TONES = ['casual', 'professional', 'promotional', 'inspirational', 'humorous'];
 
 // ---------- @route   POST /api/content/generate ----------

@@ -50,6 +50,31 @@ const publishPost = async (post) => {
   }
 };
 
+// Atomic claim: whoever flips 'scheduled' → 'publishing' owns the post. A
+// concurrent tick, a second instance or a "Publish now" request racing the
+// scheduler gets null and moves on, so a post is never published twice.
+const claimPost = (_id) =>
+  Post.findOneAndUpdate(
+    { _id, status: 'scheduled' },
+    { $set: { status: 'publishing' } },
+    { new: true }
+  );
+
+// "Publish now": publishes the given posts immediately rather than waiting for
+// the next tick. The platforms of a cross-post go out in parallel, so one
+// slow platform does not hold up the others. Resolves to the posts in their
+// final state, in the order of `ids`.
+const publishPostsNow = (ids) =>
+  Promise.all(
+    ids.map(async (_id) => {
+      const post = await claimPost(_id);
+      // The scheduler claimed it first; report whatever state it is in now.
+      if (!post) return Post.findById(_id);
+      await publishPost(post);
+      return post;
+    })
+  );
+
 // Returns 'scheduled' to any post left mid-claim by a crashed or restarted run.
 const releaseStaleClaims = async () => {
   const cutoff = new Date(Date.now() - STALE_CLAIM_MS);
@@ -84,14 +109,7 @@ const publishDuePosts = async () => {
   let skipped = 0;
 
   for (const { _id } of dueIds) {
-    // Atomic claim: whoever flips 'scheduled' → 'publishing' owns the post.
-    // A concurrent tick or a second instance gets null and moves on, so a
-    // post is never published twice.
-    const post = await Post.findOneAndUpdate(
-      { _id, status: 'scheduled' },
-      { $set: { status: 'publishing' } },
-      { new: true }
-    );
+    const post = await claimPost(_id);
 
     if (!post) {
       skipped++;
@@ -110,4 +128,9 @@ const publishDuePosts = async () => {
   return { published, failed, skipped };
 };
 
-module.exports = { publishPost, publishDuePosts, releaseStaleClaims };
+module.exports = {
+  publishPost,
+  publishDuePosts,
+  publishPostsNow,
+  releaseStaleClaims,
+};
