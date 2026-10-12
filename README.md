@@ -53,7 +53,9 @@ checking four different apps to see what worked. **SocialSync puts all three job
 | 🔗 | **Connect accounts** | One account each for Instagram, Facebook, X and LinkedIn *(simulated)* |
 | 🤖 | **AI captions** | Enter a topic, platform and tone to get **3 options** from Gemini. There are 5 tones: casual, professional, promotional, inspirational and humorous |
 | 🛟 | **Always works** | With no API key, or if Gemini fails, the app falls back to template captions so it never breaks |
-| ✏️ | **Post editor** | Edit the caption and hashtags, attach an image (≤ 2 MB), see a live preview, then save as a draft or schedule |
+| ✏️ | **Post editor** | Edit the caption and hashtags, attach an image (≤ 2 MB), see a live preview, then save as a draft, schedule, or publish now |
+| 🎬 | **Video uploads** | Attach an MP4, MOV or WebM video (≤ 100 MB) with a progress bar. Files are checked by content, not just by extension. See [New_Feature.md](New_Feature.md) |
+| 📣 | **Post to many platforms at once** | Tick several platforms and one submit creates a linked post for each. Each platform publishes, fails and reports engagement on its own. Warns when the caption is too long for a platform, such as X's 280 characters |
 | 📅 | **Calendar** | Month view with colour-coded dots for drafts, scheduled posts and published posts. Click a post to edit or delete it |
 | ⏰ | **Auto-publish** | A background job checks every minute for due posts and never publishes the same post twice |
 | 📊 | **Analytics** | Charts for the last 7, 14 or 30 days, broken down per day and per platform, plus a table of top posts |
@@ -356,6 +358,8 @@ cp frontend/.env.example frontend/.env
 | `GEMINI_MODEL` | | `gemini-2.5-flash-lite` | Any Gemini model on the OpenAI-compatible endpoint |
 | `GEMINI_BASE_URL` | | Google's endpoint | Change this only if you proxy the API |
 | `FORCE_PUBLIC_DNS` | | unset | **Local only.** See [Troubleshooting](#-troubleshooting) |
+| `UPLOAD_DIR` | | `backend/uploads` | Where uploaded videos are stored. Use a persistent disk in production |
+| `MAX_VIDEO_MB` | | `100` | Largest video accepted, in MB |
 
 The `FACEBOOK_*`, `TWITTER_*` and `LINKEDIN_*` variables in `.env.example` are placeholders for future OAuth work. The code doesn't read them yet.
 
@@ -449,11 +453,24 @@ All routes start with `/api`. Every route except register, login and the health 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/posts` | The user's posts. Optional `?status=` and `?platform=` filters. Leaves out `image` to stay fast |
-| `POST` | `/posts` | Create a `draft` or `scheduled` post |
+| `POST` | `/posts` | Create a `draft` or `scheduled` post. Optional `videoKey` attaches an uploaded video |
+| `POST` | `/posts/multi` | One post per platform in `platforms: [...]`, linked by a `groupId`. Add `publishNow: true` to publish immediately |
 | `GET` | `/posts/stats` | Post counts by status |
 | `GET` | `/posts/:id` | One post, including its image |
 | `PUT` | `/posts/:id` | Edit a post. Only user-allowed status changes are accepted |
-| `DELETE` | `/posts/:id` | Delete a post |
+| `DELETE` | `/posts/:id` | Delete a post. Its video is removed once no other post uses it |
+| `DELETE` | `/posts/group/:groupId` | Delete every platform's copy of a cross-post |
+
+</details>
+
+<details>
+<summary><b>🎬 Media</b></summary>
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/media/video` | Upload one video as `multipart/form-data` in the `video` field. Returns a `key`. Rate limit: 30 per hour per user |
+| `DELETE` | `/media/video/:owner/:file` | Discard an upload that no post uses |
+| `GET` | `/uploads/videos/...` | The stored file (no `/api` prefix). Supports Range requests for seeking |
 
 </details>
 
@@ -652,17 +669,22 @@ job queue such as BullMQ with retries.
 - 🔑 **Access tokens are stored in plain text.** That's harmless while connections are mocked, but they
   must be encrypted before real OAuth is added.
 - 🖼️ **Images are stored as base64** inside the post document, with a 2 MB limit.
+- 🎬 **Videos are stored on the API server's disk.** Hosts with an ephemeral filesystem (Render,
+  Railway, Heroku) lose them on redeploy, so use a persistent disk or object storage there. See
+  [New_Feature.md](New_Feature.md#step-17-production-move-videos-to-object-storage).
 - 🍪 **JWTs are stored in `localStorage`**, which any script on the page can read.
 - 📄 **`GET /posts` has no pagination.**
-- 🧪 **Frontend tests are minimal.** Only the date utilities are tested.
+- 🧪 **Frontend tests are minimal.** Only the date and media utilities are tested.
 
 ## 🎯 Roadmap
 
 - [ ] Real OAuth and one publishing adapter per platform
 - [ ] Encrypt tokens at rest, and move JWTs to httpOnly cookies with refresh tokens
-- [ ] Object storage for images (S3 or Cloudinary)
+- [ ] Object storage for images and videos (S3 or Cloudinary)
 - [ ] Engagement sync job that pulls real metrics
-- [ ] Multi-platform posts: one submit creates a post for each selected platform
+- [x] Multi-platform posts: one submit creates a post for each selected platform
+- [x] Video uploads
+- [ ] Per-platform caption overrides inside a cross-post
 - [ ] Automatic retries with backoff for failed posts
 - [ ] Pagination on `GET /posts`
 - [ ] Teams and workspaces with an approval flow
