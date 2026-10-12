@@ -38,6 +38,20 @@ export const postsService = {
     }
   },
 
+  // Create one post per platform in `platforms` (cross-post). Accepts the
+  // same fields as `create`, plus `publishNow: true` to publish immediately.
+  createMulti: async (payload) => {
+    try {
+      const { data } = await api.post('/posts/multi', payload, {
+        // Publishing now waits for every platform, which can take a while.
+        timeout: 60000,
+      });
+      return data; // { success, groupId, count, posts }
+    } catch (error) {
+      throw new Error(getErrorMessage(error), { cause: error });
+    }
+  },
+
   // Get one post
   getById: async (id) => {
     try {
@@ -62,6 +76,16 @@ export const postsService = {
   remove: async (id) => {
     try {
       const { data } = await api.delete(`/posts/${id}`);
+      return data;
+    } catch (error) {
+      throw new Error(getErrorMessage(error), { cause: error });
+    }
+  },
+
+  // Delete every platform's copy of a cross-post
+  removeGroup: async (groupId) => {
+    try {
+      const { data } = await api.delete(`/posts/group/${groupId}`);
       return data;
     } catch (error) {
       throw new Error(getErrorMessage(error), { cause: error });

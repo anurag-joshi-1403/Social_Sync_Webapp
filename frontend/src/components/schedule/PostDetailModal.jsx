@@ -8,11 +8,12 @@ import {
   minScheduleValue,
   fromLocalInputValue,
 } from '../../utils/datetime.js';
+import { resolveMediaUrl } from '../../utils/media.js';
 
 // The parent passes key={post.id}, so this component remounts per post and
 // initialises its state from props directly rather than syncing in an effect.
 const PostDetailModal = ({ post, onClose }) => {
-  const { updatePost, deletePost } = usePosts();
+  const { posts, updatePost, deletePost, deleteGroup } = usePosts();
   const toast = useToast();
 
   const [editMode, setEditMode] = useState(false);
@@ -42,6 +43,11 @@ const PostDetailModal = ({ post, onClose }) => {
   }, [post.id, post.image, post.hasImage]);
 
   const platform = PLATFORMS.find((p) => p.id === post.platform) || PLATFORMS[0];
+
+  // The other platforms' copies of a cross-post (this one included).
+  const group = post.groupId
+    ? posts.filter((p) => p.groupId === post.groupId)
+    : [];
 
   const statusBadge =
     {
@@ -94,6 +100,22 @@ const PostDetailModal = ({ post, onClose }) => {
     }
   };
 
+  const handleDeleteGroup = async () => {
+    if (
+      !window.confirm(
+        `Delete this post from all ${group.length} platforms permanently?`
+      )
+    )
+      return;
+    try {
+      await deleteGroup(post.groupId);
+      toast.success(`Deleted from ${group.length} platforms.`);
+      onClose();
+    } catch (err) {
+      toast.error(err.message || 'Failed to delete posts');
+    }
+  };
+
   return (
     <div
       className="modal fade show d-block"
@@ -140,6 +162,15 @@ const PostDetailModal = ({ post, onClose }) => {
                 alt="post"
                 className="img-fluid rounded mb-3"
                 style={{ maxHeight: '260px', objectFit: 'cover', width: '100%' }}
+              />
+            )}
+            {post.video?.url && (
+              <video
+                src={resolveMediaUrl(post.video.url)}
+                controls
+                preload="metadata"
+                className="w-100 rounded mb-3 bg-dark"
+                style={{ maxHeight: '260px' }}
               />
             )}
 
@@ -201,6 +232,31 @@ const PostDetailModal = ({ post, onClose }) => {
                       : '—'}
                   </div>
                 </div>
+
+                {group.length > 1 && (
+                  <div className="small text-muted mt-3">
+                    <i className="bi bi-share me-1"></i>
+                    Cross-posted to{' '}
+                    {group.map((p) => {
+                      const meta = PLATFORMS.find((x) => x.id === p.platform);
+                      return (
+                        <span
+                          key={p.id}
+                          className="badge bg-light text-dark border me-1 text-capitalize"
+                        >
+                          <i
+                            className={`bi ${meta?.icon} me-1`}
+                            style={{ color: meta?.color }}
+                          ></i>
+                          {p.status}
+                        </span>
+                      );
+                    })}
+                    <div className="mt-1">
+                      Edits here change this platform's copy only.
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -222,12 +278,21 @@ const PostDetailModal = ({ post, onClose }) => {
             ) : (
               <>
                 <button
-                  className="btn btn-outline-danger me-auto"
+                  className={`btn btn-outline-danger ${group.length > 1 ? '' : 'me-auto'}`}
                   onClick={handleDelete}
                 >
                   <i className="bi bi-trash me-1"></i>
                   Delete
                 </button>
+                {group.length > 1 && (
+                  <button
+                    className="btn btn-outline-danger me-auto"
+                    onClick={handleDeleteGroup}
+                  >
+                    <i className="bi bi-trash3 me-1"></i>
+                    Delete from all {group.length}
+                  </button>
+                )}
                 <button className="btn btn-outline-secondary" onClick={onClose}>
                   Close
                 </button>

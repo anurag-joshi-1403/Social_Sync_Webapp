@@ -1,6 +1,7 @@
 import { usePosts } from '../../context/PostsContext.jsx';
 import { useToast } from '../../context/ToastContext.jsx';
 import { PLATFORMS } from '../../constants/platforms.js';
+import MediaBadge from '../common/MediaBadge.jsx';
 
 const statusBadge = {
   published: 'success',
@@ -65,15 +66,7 @@ const PostList = ({ filter = 'all', onRowClick }) => {
                   <div className="d-flex align-items-center">
                     {/* The list response omits base64 images; the full image
                         loads in the detail modal. */}
-                    {post.hasImage && (
-                      <span
-                        className="me-2 rounded bg-light text-muted d-inline-flex align-items-center justify-content-center flex-shrink-0"
-                        style={{ width: 40, height: 40 }}
-                        title="This post has an image"
-                      >
-                        <i className="bi bi-image"></i>
-                      </span>
-                    )}
+                    <MediaBadge post={post} />
                     <span>{post.content}</span>
                   </div>
                 </td>
@@ -84,6 +77,12 @@ const PostList = ({ filter = 'all', onRowClick }) => {
                       style={{ color: platform.color }}
                     ></i>
                     {platform.name}
+                    {post.groupId && (
+                      <i
+                        className="bi bi-share ms-2"
+                        title="Cross-posted to several platforms"
+                      ></i>
+                    )}
                   </span>
                 </td>
                 <td>

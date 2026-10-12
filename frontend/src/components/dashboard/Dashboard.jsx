@@ -6,6 +6,7 @@ import { postsService } from '../../services/postsService.js';
 import StatsCard from './StatsCard.jsx';
 import MiniEngagementChart from './MiniEngagementChart.jsx';
 import UpcomingPosts from './UpcomingPosts.jsx';
+import MediaBadge from '../common/MediaBadge.jsx';
 
 const EMPTY_STATS = { total: 0, scheduled: 0, published: 0, drafts: 0 };
 
@@ -125,15 +126,7 @@ const Dashboard = () => {
                   <tr key={post.id}>
                     <td className="text-truncate" style={{ maxWidth: '280px' }}>
                       <div className="d-flex align-items-center">
-                        {post.hasImage && (
-                          <span
-                            className="me-2 rounded bg-light text-muted d-inline-flex align-items-center justify-content-center flex-shrink-0"
-                            style={{ width: 32, height: 32 }}
-                            title="This post has an image"
-                          >
-                            <i className="bi bi-image small"></i>
-                          </span>
-                        )}
+                        <MediaBadge post={post} size={32} />
                         <span>{post.content}</span>
                       </div>
                     </td>
