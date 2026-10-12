@@ -4,6 +4,7 @@ const Post = require('../src/models/Post');
 const SocialAccount = require('../src/models/SocialAccount');
 const {
   publishDuePosts,
+  publishPostsNow,
   releaseStaleClaims,
 } = require('../src/services/publisherService');
 const { connect, clear, disconnect } = require('./setup');
@@ -93,6 +94,40 @@ describe('publishDuePosts', () => {
 
     const saved = await Post.findById(post._id);
     expect(saved.status).toBe('published');
+  });
+});
+
+describe('publishPostsNow', () => {
+  // "Publish now" and a scheduler tick can land at the same moment.
+  it('never publishes a post twice when racing the scheduler', async () => {
+    const user = userId();
+    await SocialAccount.create({
+      user,
+      platform: 'instagram',
+      username: 'demo',
+      accessToken: 'token',
+    });
+    const post = await duePost(user);
+
+    // Count the claims that succeed: each one is a publish.
+    const findOneAndUpdate = Post.findOneAndUpdate.bind(Post);
+    let claims = 0;
+    const spy = vi
+      .spyOn(Post, 'findOneAndUpdate')
+      .mockImplementation(async (...args) => {
+        const doc = await findOneAndUpdate(...args);
+        if (doc) claims++;
+        return doc;
+      });
+
+    try {
+      await Promise.all([publishPostsNow([post._id]), publishDuePosts()]);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(claims).toBe(1);
+    expect((await Post.findById(post._id)).status).toBe('published');
   });
 });
 
